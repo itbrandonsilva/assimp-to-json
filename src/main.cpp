@@ -16,7 +16,6 @@ struct AnimationKeys {
 struct MeshBone {
 	int index;
 	int pindex;
-	aiMatrix4x4 offsetMatrix;
 	aiMatrix4x4 nodeTransform;
 	std::string parentName;
 	std::map<int, float> weights;
@@ -399,6 +398,11 @@ Mesh populateMeshFromDae(std::string filePath) {
 			aiNode* boneNode = armature->FindNode(boneName.c_str());
 			aiNode* parentNode = boneNode->mParent;
 
+			/*
+
+			This is code that would be used in an animation system, not an exporter... *facepalm*
+			http://sourceforge.net/p/assimp/discussion/817654/thread/5462cbf5
+
 			boneMatrices[i] = bone->mOffsetMatrix;
 			const aiNode* tempNode = boneNode;
 			while (tempNode) {
@@ -406,15 +410,11 @@ Mesh populateMeshFromDae(std::string filePath) {
 				tempNode = tempNode->mParent;
 			}
 
+			*/
+
 			mesh.bones[boneName].index = i;
 			mesh.bones[boneName].parentName = parentNode->mName.C_Str();
-			mesh.bones[boneName].offsetMatrix = boneMatrices[i];
 			mesh.bones[boneName].nodeTransform = boneNode->mTransformation;
-
-			aiMatrix4x4 omm;
-			aiQuaternion drott; aiVector3D dposs;
-			omm = mesh.bones[boneName].offsetMatrix;
-			omm.DecomposeNoScaling(drott, dposs);
 
 			int numWeights = bone->mNumWeights;
 			std::cout << "\n    Bone (name): " << boneName;
