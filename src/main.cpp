@@ -7,29 +7,51 @@
 #include <assimp\scene.h>
 #include <glm\glm.hpp>
 
-struct BoneAnimation {
+struct AnimationKeys {
 	std::vector<aiQuatKey> rotationKeys;
 	std::vector<aiVectorKey> positionKeys;
 	std::vector<aiVectorKey> scaleKeys;
 };
 
 struct MeshBone {
-	std::vector<float> weights;
-	std::map<std::string, BoneAnimation> animations;
+	int index;
+	int pindex;
+	aiMatrix4x4 offsetMatrix;
+	aiMatrix4x4 nodeTransform;
+	std::string parentName;
+	std::map<int, float> weights;
+	std::map<std::string, AnimationKeys> animations;
+};
+
+struct AnimationInfo {
+	float length;
+	float fps;
 };
 
 struct Mesh {
 	std::string name;
+	int numFaces;
 	std::vector<aiVector3D> vertex;
+	std::vector<aiVector3D> normal;
 	std::vector<aiVector3D> uv;
 	std::vector<unsigned short> index;
 	std::string diffuseMap;
 	std::string normalMap;
-	//std::vector<glm::vec2> vertexWeights;
 	std::map< std::string, MeshBone > bones;
+	std::map< std::string, AnimationInfo > animations;
 
 	std::string error;
 };
+
+struct VertexBoneWeights {
+	std::vector<int> boneIds;
+	std::vector<float> boneWeights;
+};
+
+typedef std::map< std::string, MeshBone >::iterator MeshBonesIterator;
+typedef std::map< std::string, AnimationInfo >::iterator AnimationInfoIterator;
+typedef std::map< std::string, AnimationKeys >::iterator AnimationKeysIterator;
+typedef std::map< int, VertexBoneWeights >::iterator VertexBoneWeightsIterator;
 
 void pause() {
 	std::cout << "\n\n";
@@ -38,80 +60,207 @@ void pause() {
 
 Json::Value meshToJM(Mesh mesh) {
 	Json::Value root;
+	std::cout << "\n\nBuilding JSON.";
 
-	root["name"] = mesh.name;
-	root["material"]["diffuse"] = mesh.diffuseMap;
-	root["material"]["normal"] = mesh.normalMap;
-
+	Json::Value vertices = Json::Value(Json::arrayValue);
 	int numVertices = mesh.vertex.size();
 	for (unsigned int i = 0; i < numVertices; ++i) {
-		Json::Value v;
-		v["x"] = mesh.vertex[i].x;
-		v["y"] = mesh.vertex[i].y;
-		v["z"] = mesh.vertex[i].z;
-		root["vertices"].append(v);
+		vertices.append(mesh.vertex[i].x);
+		vertices.append(mesh.vertex[i].y);
+		vertices.append(mesh.vertex[i].z);
 	};
+	root["vertices"] = vertices;
 
+	Json::Value uvs = Json::Value(Json::arrayValue);
 	int numUVs = mesh.uv.size();
 	for (unsigned int i = 0; i < numUVs; ++i) {
-		Json::Value v;
-		v["x"] = mesh.uv[i].x;
-		v["y"] = mesh.uv[i].y;
-		root["uvs"].append(v);
+		uvs.append(mesh.uv[i].x);
+		uvs.append(mesh.uv[i].y);
 	};
+	root["uvs"].append(uvs);
 
+	Json::Value faces = Json::Value(Json::arrayValue);
 	int numIndices = mesh.index.size();
-	for (unsigned int i = 0; i < numIndices; ++i) {
-		root["indices"].append(mesh.index[i]);
+	for (unsigned int i = 0; i < numIndices; i+=3) {
+		faces.append(10);
+		faces.append(mesh.index[i]);
+		faces.append(mesh.index[i+1]);
+		faces.append(mesh.index[i+2]);
+		faces.append(0);
+		faces.append(i);
+		faces.append(i+1);
+		faces.append(i+2);
 	};
+	root["faces"] = faces;
 
-	Json::Value bones;
+	Json::Value normals = Json::Value(Json::arrayValue);
+	int numNormals = mesh.normal.size();
+	for (unsigned int i = 0; i < numNormals; ++i) {
+		normals.append(mesh.normal[i].x);
+		normals.append(mesh.normal[i].y);
+		normals.append(mesh.normal[i].z);
+	};
+	root["normals"] = normals;
 
-	//typedef std::map< std::string, std::map<std::string, std::vector<aiQuatKey>> >::iterator outerQuat;
-	//typedef std::map< std::string, std::map<std::string, std::vector<aiVectorKey>> >::iterator outerVector;
-	//typedef std::map<std::string, std::vector<aiQuatKey>>::iterator innerQuat;
-	//typedef std::map<std::string, std::vector<aiVectorKey>>::iterator innerVector;
+	Json::Value metadata;
+	metadata["formatVersion"] = 3.1f;
+    metadata["formatVersion"].asFloat();
+	metadata["generatedBy"] = "assimp-to-json converter";
+	metadata["vertices"] = numVertices;
+	metadata["faces"] = mesh.numFaces;
+	metadata["description"] = "void.";
+	root["metadata"] = metadata;
 
-	typedef std::map< std::string, MeshBone>::iterator MeshBoneIterator;
-	typedef std::map< std::string, BoneAnimation>::iterator BoneAnimationIterator;
-	//typedef std::map< std::string, aiQuatKey>::iterator RotKeyIterator;
-	//typedef std::map< std::string, aiVectorKey>::iterator PosKeyIterator;
-	//typedef std::map< std::string, aiVectorKey>::iterator SclKeyIterator;
+	Json::Value materials = Json::Value(Json::arrayValue);
 
-	for (MeshBoneIterator i = mesh.bones.begin(); i != mesh.bones.end(); ++i) {
-		std::string boneName = i->first;
-		MeshBone bone = i->second;
+	Json::Value material;
+	material["DbgColor"] = 15658734;
+	material["DbgIndex"] = 0;
+	material["DbgName"] = "cube_mat";
+	material["mapDiffuse"] = mesh.diffuseMap;
+	//material["mapNormal"] = mesh.normalMap;
+	materials.append(material);
+	root["materials"] = materials;
 
-		for (unsigned int j = 0; j < bone.weights.size(); ++j) {
-			Json::Value weight = bone.weights[j];
-			bones[boneName]["weights"].append(weight.asFloat());
-		}
+	Json::Value bones          = Json::Value(Json::arrayValue);
+	Json::Value skinIndices    = Json::Value(Json::arrayValue);
+	Json::Value skinWeights    = Json::Value(Json::arrayValue);
 
-		for (BoneAnimationIterator j = bone.animations.begin(); j != bone.animations.end(); ++j) {
-
-			Json::Value animation;
-
-			std::string animationName = j->first;
-			BoneAnimation boneAnimation = j->second;
-
-			for(unsigned int k = 0; k < boneAnimation.rotationKeys.size(); ++k) {
-				aiQuatKey key = boneAnimation.rotationKeys[k];
-
-				Json::Value values;
-				values["x"] = key.mValue.x;
-				values["y"] = key.mValue.y;
-				values["z"] = key.mValue.z;
-
-				int frame = key.mTime;
-				animation[animationName][frame]["rotationKeys"] = values;
-			}
-
-			bones[boneName]["animations"] = animation;
-		}
+	Json::Value animation;
+	for (AnimationInfoIterator it = mesh.animations.begin(); it != mesh.animations.end(); ++it) {
+		AnimationInfo info = it->second;
+		animation["name"] = it->first;
+		animation["length"] = info.length;
+		animation["fps"] = info.fps;
+		animation["JIT"] = 0;
+		animation["hierarchy"] = Json::Value(Json::arrayValue);
 	}
 
+	for (MeshBonesIterator i = mesh.bones.begin(); i != mesh.bones.end(); ++i) {
+		Json::Value jsonBone;
+		MeshBone bone = i->second;
+		std::string boneName = i->first;
+		jsonBone["name"] = boneName;
+		jsonBone["parent"] = bone.pindex;
+
+		aiMatrix4x4 om = bone.nodeTransform;
+		aiVector3D dscl; aiQuaternion drot; aiVector3D dpos;
+		om.Decompose(dscl, drot, dpos);
+
+		Json::Value pos = Json::Value(Json::arrayValue);
+		pos.append(dpos.x); pos.append(dpos.y); pos.append(dpos.z);
+		Json::Value rotq = Json::Value(Json::arrayValue);
+		rotq.append(drot.x); rotq.append(drot.y); rotq.append(drot.z); rotq.append(drot.w);
+		Json::Value scl = Json::Value(Json::arrayValue);
+		scl.append(dscl.x); scl.append(dscl.y); scl.append(dscl.z);
+
+		jsonBone["pos"] = pos;
+		jsonBone["scl"] = scl;
+		jsonBone["rotq"] = rotq;
+
+		/* 
+		
+		Some example JSON models include the "rot" field on bones, thought they don't seem to be required
+		when "rotq" is populated.
+
+		Json::Value rot = Json::Value(Json::arrayValue);
+		rot.append(1); rot.append(1); rot.append(1);
+		jsonBone["rot"] = rot;
+
+		*/
+
+		bones[bone.index] = jsonBone;
+
+		std::map<int, VertexBoneWeights> vertexWeights;
+
+		/* 
+		
+		The next two loops map vertex indices to weight information relevant to that vertex.
+
+		The first loop organizes/maps the bone weight information to each vertex.
+		The second loop maps the data into the Threejs JSON format which will be exported.
+
+		Right now, I'm only processing two bones per vertex until I confirm the Threejs importer
+		can handle more.
+
+		*/
+
+		typedef std::map<int, float>::iterator it_type;
+		for(it_type it = bone.weights.begin(); it != bone.weights.end(); it++) {
+
+			int vertexId = it->first;
+			VertexBoneWeights* w = &vertexWeights[vertexId];
+			if (w->boneIds.size() > 2) {
+				continue;
+			}
+
+			w->boneIds.push_back(bone.index);
+			w->boneWeights.push_back(it->second);
+		}
+
+		for( VertexBoneWeightsIterator it = vertexWeights.begin(); it != vertexWeights.end(); ++it ) {
+			
+			int vertexId = it->first;
+			VertexBoneWeights w = it->second;
+
+			int boneId = w.boneIds[0];
+			float boneWeight = w.boneWeights[0];
+
+			// Update to check if boneIds are populated and append data accordingly.
+			skinIndices[vertexId+vertexId] = boneId; skinIndices[vertexId+vertexId+1] = 0;
+			skinWeights[vertexId+vertexId] = boneWeight; skinWeights[vertexId+vertexId+1] = 0;
+
+		}
+
+		root["skinWeights"] = skinWeights;
+		root["skinIndices"] = skinIndices;
+
+		for (AnimationInfoIterator j = mesh.animations.begin(); j != mesh.animations.end(); ++j) {
+
+			std::string animationName = j->first;
+			AnimationKeys animationKeys = bone.animations[animationName];
+
+			Json::Value hierarchyBone;
+			hierarchyBone["parent"] = bone.pindex;
+			hierarchyBone["keys"] = Json::Value(Json::arrayValue);
+
+			for (unsigned int l = 0; l < animationKeys.rotationKeys.size(); ++l) {
+
+				Json::Value key;
+
+				aiQuatKey rotationKey = animationKeys.rotationKeys[l];
+				key["time"] = rotationKey.mTime;
+				key["rot"] = Json::Value(Json::arrayValue);
+				key["rot"].append(rotationKey.mValue.x);
+				key["rot"].append(rotationKey.mValue.y);
+				key["rot"].append(rotationKey.mValue.z);
+				key["rot"].append(rotationKey.mValue.w);
+
+				aiVectorKey positionKey = animationKeys.positionKeys[l];
+				key["pos"] = Json::Value(Json::arrayValue);
+				key["pos"].append(positionKey.mValue.x);
+				key["pos"].append(positionKey.mValue.y);
+				key["pos"].append(positionKey.mValue.z);
+
+				aiVectorKey scaleKey = animationKeys.scaleKeys[l];
+				key["scl"] = Json::Value(Json::arrayValue);
+				key["scl"].append(scaleKey.mValue.x);
+				key["scl"].append(scaleKey.mValue.y);
+				key["scl"].append(scaleKey.mValue.z);
+
+				hierarchyBone["keys"].append(key);
+			}
+
+			animation["hierarchy"].append(hierarchyBone);
+
+		}
+
+	}
+
+	root["animation"] = animation;
 	root["bones"] = bones;
 
+	std::cout << "\nDone building JSON.";
 	return root;
 };
 
@@ -119,7 +268,6 @@ bool writeJsonValueToFile(std::string filepath, Json::Value json) {
 
 	Json::StyledWriter writer;
 	//Json::FastWriter writer;
-
 	//std::cout << writer.write(json); 
 
 	std::ofstream file;
@@ -133,7 +281,6 @@ bool writeJsonValueToFile(std::string filepath, Json::Value json) {
 Mesh populateMeshFromDae(std::string filePath) {
 	Assimp::Importer importer;
 	const aiScene* scene = importer.ReadFile(filePath, NULL);
-
 	Mesh mesh;
 
 	if (scene == NULL) {
@@ -141,30 +288,37 @@ Mesh populateMeshFromDae(std::string filePath) {
 		return mesh;
 	}
 
-	//aiNode* rootNode = scene->mNumMeshes;
-
-	std::cout << "\nNormal: " << scene->mNumMeshes;
-	std::cout << "\nRoot: " << scene->mRootNode->mNumMeshes;
-
-	int hasMesh = scene->mNumMeshes;
-
-	//hasMesh = 0;
-	if (!hasMesh) {
+	int numMeshes = scene->mNumMeshes;
+	if (!numMeshes) {
 		mesh.error = "No meshes found in scene.";
+		return mesh;
+	}
+
+	if (numMeshes > 1) {
+		mesh.error = "Please export only 1 mesh.";
 		return mesh;
 	}
 
 	aiMesh* m = scene->mMeshes[0];
 	mesh.name = m->mName.C_Str();
 
-	//std::cout << "\nRoot: " << m->;
-
+	bool hasNormals = m->HasNormals();
 	int numVertices = m->mNumVertices;
-	for (unsigned int i = 0; i < numVertices; ++i) {
-		mesh.vertex.push_back(m->mVertices[i]);
+
+	if (hasNormals) {
+		std::cout << "\nVertex normals found.";
+	} else {
+		std::cout << "\nPrecalculated normals from source not found.";
 	}
 
-	//int numUVComponents = m->mNumUVComponents;
+	std::cout << "\nNum Vertices: " << numVertices;
+	for (unsigned int i = 0; i < numVertices; ++i) {
+		mesh.vertex.push_back(m->mVertices[i]);
+		if (hasNormals) {
+			mesh.normal.push_back(m->mNormals[i].Normalize());
+		}
+	}
+
 	for (unsigned int i = 0; m->mNumUVComponents[i] > 0; ++i) {
 		for (unsigned int j = 0; j < numVertices; ++j) {
 			mesh.uv.push_back(m->mTextureCoords[i][j]);
@@ -172,14 +326,17 @@ Mesh populateMeshFromDae(std::string filePath) {
 	}
 
 	int numFaces = m->mNumFaces;
+	std::cout << "\nNum Faces: " << numFaces;
+	mesh.numFaces = numFaces;
 	for (unsigned int i = 0; i < numFaces; ++i) {
 		for (unsigned int j = 0; j < m->mFaces[i].mNumIndices; ++j) {
 			mesh.index.push_back(m->mFaces[i].mIndices[j]); 
 		}
 	}
 
-	if (m->mMaterialIndex > -1) {
-		std::cout << "\nMaterials found."; 
+	int materialIndex = m->mMaterialIndex;
+	if (materialIndex >= 0) {
+		std::cout << "\n\nMaterials found."; 
 
 		int materialIndex = m->mMaterialIndex;
 		aiMaterial* material = scene->mMaterials[materialIndex];
@@ -189,101 +346,162 @@ Mesh populateMeshFromDae(std::string filePath) {
 		type = aiTextureType(aiTextureType_DIFFUSE);
 		int diffuseTextureCount = material->GetTextureCount(type);
 		if (diffuseTextureCount > 0) {
+			std::cout << "\n    Diffuse map found: ";
 			for (unsigned int i = 0; i < diffuseTextureCount; ++i) {
 				aiString path;
 				material->GetTexture(type, i, &path);
+				std::cout << path.C_Str();
 				mesh.diffuseMap = path.C_Str();
 			}
+		} else {
+			std::cout << "\n    No diffuse map found.";
 		}
 
+		/* Until I can actually get normal maps working properly in Three.js, I'll leave this unimplemented.
 		type = aiTextureType(aiTextureType_NORMALS);
 		int normalTextureCount = material->GetTextureCount(type);
 		if (normalTextureCount > 0) {
+			std::cout << "\n    Normal map found: ";
 			for (unsigned int i = 0; i < normalTextureCount; ++i) {
 				aiString path;
 				material->GetTexture(type, i, &path);
+				std::cout << path.C_Str();
 				mesh.normalMap = path.C_Str();
 			}
+		} else {
+			std::cout << "\n    No normal map found.";
 		}
 
-		//std::cout << "\n\nNumTex: " << ;
+		*/
 	} else { 
-		std::cout << "\nNo materials found."; 
+		std::cout << "\n\nNo materials found."; 
 	}
 
+	aiMatrix4x4 armatureTransformation;
+	aiMatrix4x4 sceneTransformation = scene->mRootNode->mTransformation;
+
 	if (m->HasBones()) {
+		std::cout << "\n\nBones found; loading bones.";
 
-		std::cout << "\n\nBones found; loading bones and animations.";
+		// We shouldn't assume the armature name is "Armature" in the future.
+	    const char* armatureName = "Armature";
+		aiNode* armature = scene->mRootNode->FindNode(armatureName);
 
-		std::map<std::string, int> bones;
+		armatureTransformation = armature->mTransformation;
+
+		std::cout << "\nNum Bones: " << m->mNumBones;
+
+		std::vector<aiMatrix4x4> boneMatrices(m->mNumBones);
 		for (unsigned int i = 0; i < m->mNumBones; ++i) {
 			aiBone* bone = m->mBones[i];
 			std::string boneName = bone->mName.C_Str();
-			std::cout << "\nBone name: " << boneName;
-			bones[boneName] = i;
+
+			aiNode* boneNode = armature->FindNode(boneName.c_str());
+			aiNode* parentNode = boneNode->mParent;
+
+			boneMatrices[i] = bone->mOffsetMatrix;
+			const aiNode* tempNode = boneNode;
+			while (tempNode) {
+				boneMatrices[i] *= tempNode->mTransformation;
+				tempNode = tempNode->mParent;
+			}
+
+			mesh.bones[boneName].index = i;
+			mesh.bones[boneName].parentName = parentNode->mName.C_Str();
+			mesh.bones[boneName].offsetMatrix = boneMatrices[i];
+			mesh.bones[boneName].nodeTransform = boneNode->mTransformation;
+
+			aiMatrix4x4 omm;
+			aiQuaternion drott; aiVector3D dposs;
+			omm = mesh.bones[boneName].offsetMatrix;
+			omm.DecomposeNoScaling(drott, dposs);
 
 			int numWeights = bone->mNumWeights;
-			mesh.bones[boneName].weights.resize(numWeights);
+			std::cout << "\n    Bone (name): " << boneName;
+			std::cout << "\n        Num Influenced vertices: " << numWeights;
+
 			for (unsigned int j = 0; j < numWeights; ++j) {
 				aiVertexWeight weight = bone->mWeights[j];
-				mesh.bones[boneName].weights[weight.mVertexId] = weight.mWeight;
+				mesh.bones[boneName].weights[weight.mVertexId] = weight.mWeight; 
 			};
 		};
+
+		// Populate the pindex property of each bone with the bone index of the bones parent.
+		for (MeshBonesIterator i = mesh.bones.begin(); i != mesh.bones.end(); ++i) {
+			MeshBone* meshBone = &i->second;
+			if (meshBone->parentName == armatureName) {
+				meshBone->pindex = -1;
+			} else {
+				meshBone->pindex = mesh.bones[meshBone->parentName].index;
+			}
+		}
 
 		int numAnimations = scene->mNumAnimations;
-		for (unsigned int i = 0; i < numAnimations; ++i) {
+		if (numAnimations > 0) {
+			std::cout << "\n\nAnimations found; loading animations.";
+		}
 
+		for (unsigned int i = 0; i < numAnimations; ++i) {
 			aiAnimation* animation = scene->mAnimations[i];
+
 			std::string animationName = animation->mName.C_Str();
-			std::cout << "\nAnimation name: " << animationName;
+			std::cout << "\n    Animation name: \"" << animationName << "\"";
+
+			AnimationInfo animationInfo;
+			animationInfo.length = animation->mDuration;
+			animationInfo.fps    = animation->mTicksPerSecond;
+			std::cout << "\n        Frame rate: " << animation->mTicksPerSecond;
+			mesh.animations[animationName] = animationInfo;
+
 			int numChannels = animation->mNumChannels;
-			for (unsigned int j = 0; i < numChannels; ++i) {
+			for (unsigned int j = 0; j < numChannels; ++j) {
 
 				aiNodeAnim* animationChannel = animation->mChannels[j];
-				std::string nodeName = animationChannel->mNodeName.C_Str();
+				std::string boneName = animationChannel->mNodeName.C_Str();
+				int boneIndex = mesh.bones[boneName].index;
 
-				if (bones[nodeName] > -1) {
+				AnimationKeys* animationKeys = &mesh.bones[boneName].animations[animationName];
+				for (int k = 0; k < scene->mAnimations[i]->mChannels[boneIndex]->mNumRotationKeys; ++k) {
+					animationKeys->rotationKeys.push_back(animationChannel->mRotationKeys[k]);
+				};
 
-					std::string boneName = nodeName;
-					BoneAnimation* boneAnimation = &mesh.bones[boneName].animations[animationName];
+				for (int k = 0; k < scene->mAnimations[i]->mChannels[boneIndex]->mNumPositionKeys; ++k) {
+					animationKeys->positionKeys.push_back(animationChannel->mPositionKeys[k]);
+				};
 
-					for (int k = 0; k < scene->mAnimations[0]->mChannels[bones[nodeName]]->mNumRotationKeys; ++k) {
-						boneAnimation->rotationKeys.push_back(animationChannel->mRotationKeys[k]);
-					};
+				for (int k = 0; k < scene->mAnimations[i]->mChannels[boneIndex]->mNumScalingKeys; ++k) {
+					animationKeys->scaleKeys.push_back(animationChannel->mScalingKeys[k]);
+				};
 
-					for (int k = 0; k < scene->mAnimations[0]->mChannels[bones[nodeName]]->mNumPositionKeys; ++k) {
-						boneAnimation->positionKeys.push_back(animationChannel->mPositionKeys[k]);
-					};
-
-					for (int k = 0; k < scene->mAnimations[0]->mChannels[bones[nodeName]]->mNumScalingKeys; ++k) {
-						boneAnimation->scaleKeys.push_back(animationChannel->mScalingKeys[k]);
-					};
-
-					//Animations* animations = &mesh.animations;
-					//if (animations->position
-
-				}
 			};
 		};
 
-		// Load bone weights.
-
 	} else {
-		std::cout << "\nNo bones/armature found.";
+		std::cout << "\nNo bones found.";
 	}
 
 	return mesh;
 };
 
-int main () {
+int main (int argc, char* argv[]) {
 
-	std::cout << "\n****\nThis utility only loads one mesh and all it's animations from the dae scene.\n****\n";
+	std::cout << "\n****";
+	std::cout << "\nThis utility converts one mesh at a time."; 
+	std::cout << "\nBe sure that your source, whatever format it may be, contains one mesh.";
+	std::cout << "\n  Supports:";
+	std::cout << "\n    - Texture/diffuse map";
+	std::cout << "\n    - Skinned animations";
+	std::cout << "\n****\n";
 
-	//Mesh mesh = populateMeshFromDae("box.dae");
-	//Mesh mesh = populateMeshFromDae("animBox.dae");
-	//Mesh mesh = populateMeshFromDae("animBox.fbx");
-	//Mesh mesh = populateMeshFromDae("animBox.3ds");
-	Mesh mesh = populateMeshFromDae("animBox.x");
+	if (argc < 2) {
+		std::cout << "\nPlease specify a file to convert. Supported formats are determined by assimp.";
+		pause();
+		return 1;
+	}
+	std::string filename = argv[1];
+	filename = "animBoxNewer.dae";
+
+	Mesh mesh = populateMeshFromDae(filename);
 	if (mesh.error.length() > 0) {
 		std::cout << "\n\nError: " << mesh.error;
 		pause();
@@ -291,13 +509,9 @@ int main () {
 	}
 
 	Json::Value jm = meshToJM(mesh);
-	writeJsonValueToFile("JSON.jm", jm);
 
-	/*
-	std::cout << root;
-
-
-	*/
+	// Update so that the filename resembles the original filename.
+	writeJsonValueToFile("JSON.js", jm);
 
 	pause();
 	return 0;
